@@ -52,8 +52,8 @@
 <body>
 
 <header>
-  <h1>🎤 Vocals-Only Video Pipeline (yt-dlp)</h1>
-  <p class="sub">YouTube URL → yt-dlp audio → clean → 16:9 video → AI metadata</p>
+  <h1>🎤 Vocals-Only Video Pipeline</h1>
+  <p class="sub">YouTube URL → RapidAPI audio → clean → 16:9 video → AI metadata</p>
   <div id="health" class="health"></div>
 </header>
 
@@ -79,12 +79,12 @@
   </section>
 
   <section class="card disabled" id="step2">
-    <h2>2. Download audio (yt-dlp)</h2>
+    <h2>2. Download audio (RapidAPI)</h2>
     <button id="btn-download">Download audio now</button>
     <div id="download-out" class="hidden">
       <p>Original audio (download, clean it however you want, then come to Step 3):</p>
       <a id="download-link" href="#" download class="big-link">⬇ Download original audio</a>
-      <details><summary>yt-dlp log</summary><pre id="download-log"></pre></details>
+      <details><summary>RapidAPI log</summary><pre id="download-log"></pre></details>
     </div>
   </section>
 
@@ -141,7 +141,7 @@ const enableStep = el => el.classList.remove("disabled");
 fetch("/api/health").then(r => r.json()).then(h => {
   const box = $("health");
   if (h.ok) {
-    box.textContent = "✅ FFmpeg detected — yt-dlp ready";
+    box.textContent = "✅ FFmpeg detected — RapidAPI ready";
     box.classList.add("ok");
   } else {
     box.textContent = "❌ Missing: " + h.missing.join(", ") + ". " + h.hint;
@@ -189,7 +189,7 @@ $("btn-meta").onclick = async () => {
 
 // ---- STEP 2 ----
 $("btn-download").onclick = async () => {
-  $("btn-download").textContent = "Downloading via yt-dlp...";
+  $("btn-download").textContent = "Downloading via RapidAPI...";
   $("btn-download").disabled = true;
 
   try {
