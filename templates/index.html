@@ -262,11 +262,17 @@ $("btn-video").onclick = async () => {
       }),
     });
     const data = await res.json();
-    if (!data.success) throw new Error(data.error);
 
-    $("video-link").href = data.video_url;
-    $("video-player").src = data.video_url;
+    // Always show logs, even on failure
     $("video-log").textContent = (data.logs || []).join("\n");
+
+    if (!data.success) {
+      show($("video-out"));
+      throw new Error(data.error + " — see log below");
+    }
+
+    $("video-link").href  = data.video_url;
+    $("video-player").src = data.video_url;
     show($("video-out"));
     enableStep($("step5"));
   } catch (e) {
