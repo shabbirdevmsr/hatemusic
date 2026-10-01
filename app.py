@@ -1,4 +1,4 @@
-"""Flask web app wrapping the yt-dlp pipeline."""
+"""Flask web app wrapping the RapidAPI download pipeline."""
 
 import re
 import shutil
@@ -105,7 +105,9 @@ def api_download():
         video_id = data.get("video_id") or extract_video_id(data.get("url", ""))
 
         logs = []
-        audio_path = download_audio(video_id, log=lambda m: logs.append(str(m)))
+        audio_url  = f"https://www.youtube.com/watch?v={video_id}"
+        audio_path = download_audio(audio_url, video_id=video_id,
+                                    log=lambda m: logs.append(str(m)))
 
         return jsonify({
             "success": True,
@@ -218,7 +220,7 @@ def api_file(folder, name):
 if __name__ == "__main__":
     missing = check_ffmpeg()
     print("=" * 60)
-    print(" Vocals-Only Video Pipeline (yt-dlp + Flask)")
+    print(" Vocals-Only Video Pipeline (RapidAPI + Flask)")
     print("=" * 60)
     if missing:
         print(f"WARNING: missing on PATH -> {', '.join(missing)}")
