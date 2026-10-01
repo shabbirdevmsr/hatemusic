@@ -10,8 +10,9 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
+RUN mkdir -p audio images videos uploads state/sessions
 
-RUN mkdir -p audio images videos uploads
+EXPOSE 5000
 
-# Run ONLY the bot
-CMD ["python", "bot.py"]
+# Run Flask (for upload + files) AND the bot in the same container
+CMD ["sh", "-c", "gunicorn --bind 0.0.0.0:5000 --workers 1 --timeout 600 app:app & python bot.py"]
