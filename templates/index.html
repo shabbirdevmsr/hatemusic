@@ -2,59 +2,169 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Vocals-Only Video Pipeline</title>
 <style>
+  :root {
+    --bg-main: #0e1116;
+    --bg-card: #161b22;
+    --bg-header: #0b0e13;
+    --border: #30363d;
+    --border-card: #21262d;
+    --text-main: #e6edf3;
+    --text-muted: #8b949e;
+    --primary: #238636;
+    --primary-hover: #2ea043;
+    --accent: #1f6feb;
+    --accent-hover: #388bfd;
+    --error: #f85149;
+    --success: #2ea043;
+  }
+
   * { box-sizing: border-box; }
-  body { margin: 0; font-family: -apple-system, "Segoe UI", Roboto, sans-serif;
-         background: #0e1116; color: #e6edf3; line-height: 1.5; }
-  header { padding: 24px 32px; border-bottom: 1px solid #21262d; background: #0b0e13; }
-  header h1 { margin: 0 0 4px; font-size: 22px; }
-  .sub { color: #8b949e; margin: 0; font-size: 14px; }
-  .health { margin-top: 10px; font-size: 13px; padding: 6px 10px;
-            border-radius: 6px; display: inline-block; }
-  .health.ok  { background: #0d3018; color: #7ee787; }
-  .health.err { background: #3a1318; color: #ffa198; }
-  main { max-width: 900px; margin: 0 auto; padding: 24px 20px 60px; }
-  .card { background: #161b22; border: 1px solid #21262d; border-radius: 10px;
-          padding: 20px; margin-bottom: 18px; }
-  .card h2 { margin: 0 0 14px; font-size: 16px; }
-  .card.disabled { opacity: 0.45; pointer-events: none; }
-  .row { display: flex; gap: 10px; }
-  input[type=text], input[type=file] { flex: 1; padding: 10px 12px;
-      border-radius: 6px; border: 1px solid #30363d; background: #0d1117;
-      color: #e6edf3; font-size: 14px; }
-  input[type=file] { padding: 8px; }
-  button { padding: 10px 18px; background: #238636; color: white; border: 0;
-           border-radius: 6px; font-size: 14px; cursor: pointer; font-weight: 600; }
-  button:hover  { background: #2ea043; }
+  body { 
+    margin: 0; font-family: -apple-system, "Segoe UI", Roboto, sans-serif;
+    background: var(--bg-main); color: var(--text-main); line-height: 1.5; 
+  }
+
+  /* Header */
+  header { 
+    padding: 24px 32px; border-bottom: 1px solid var(--border-card); 
+    background: var(--bg-header); position: sticky; top: 0; z-index: 10;
+    backdrop-filter: blur(10px); background: rgba(11, 14, 19, 0.85);
+  }
+  header h1 { margin: 0 0 4px; font-size: 24px; font-weight: 700; letter-spacing: -0.5px; }
+  .sub { color: var(--text-muted); margin: 0; font-size: 14px; }
+  .health { 
+    margin-top: 12px; font-size: 13px; padding: 6px 12px;
+    border-radius: 20px; display: inline-flex; align-items: center; gap: 6px;
+    font-weight: 500; transition: all 0.3s ease;
+  }
+  .health.ok  { background: rgba(46, 160, 67, 0.15); color: #7ee787; border: 1px solid rgba(46, 160, 67, 0.4); }
+  .health.err { background: rgba(248, 81, 73, 0.15); color: #ffa198; border: 1px solid rgba(248, 81, 73, 0.4); }
+
+  /* Main Layout */
+  main { max-width: 900px; margin: 0 auto; padding: 32px 20px 80px; }
+  
+  /* Cards */
+  .card { 
+    background: var(--bg-card); border: 1px solid var(--border-card); 
+    border-radius: 12px; padding: 24px; margin-bottom: 24px;
+    box-shadow: 0 4px 20px rgba(0,0,0,0.2);
+    transition: all 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+  }
+  .card h2 { margin: 0 0 16px; font-size: 18px; display: flex; align-items: center; gap: 8px;}
+  .card.disabled { 
+    opacity: 0.4; pointer-events: none; transform: scale(0.98); 
+    filter: grayscale(100%); border-color: transparent; box-shadow: none;
+  }
+  
+  /* Inputs & Buttons */
+  .row { display: flex; gap: 12px; flex-wrap: wrap; }
+  input[type=text], input[type=file] { 
+    flex: 1; min-width: 200px; padding: 12px 16px;
+    border-radius: 8px; border: 1px solid var(--border); background: #0d1117;
+    color: var(--text-main); font-size: 15px; transition: border-color 0.2s, box-shadow 0.2s; 
+  }
+  input[type=text]:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px rgba(31, 111, 235, 0.3); }
+  input[type=file] { padding: 9px; cursor: pointer; }
+  input[type=file]::file-selector-button {
+    background: var(--border); color: white; border: none; padding: 6px 12px; border-radius: 4px; cursor: pointer; margin-right: 12px;
+  }
+  
+  button { 
+    padding: 12px 20px; background: var(--primary); color: white; border: 0;
+    border-radius: 8px; font-size: 15px; cursor: pointer; font-weight: 600; 
+    transition: all 0.2s; position: relative; overflow: hidden;
+    display: inline-flex; align-items: center; justify-content: center; min-width: 140px;
+  }
+  button:hover:not(:disabled) { background: var(--primary-hover); transform: translateY(-1px); box-shadow: 0 4px 12px rgba(46, 160, 67, 0.4); }
+  button:active:not(:disabled) { transform: translateY(1px); }
   button:disabled { opacity: 0.6; cursor: not-allowed; }
-  .hidden { display: none; }
-  #meta-out { display: flex; gap: 20px; margin-top: 16px; }
-  #thumb-preview { width: 220px; border-radius: 6px; display: none; }
-  .meta-text { flex: 1; }
-  .label { font-size: 12px; color: #8b949e; text-transform: uppercase; margin-top: 8px; }
-  .value { font-size: 14px; word-break: break-word; }
-  .mono { font-family: monospace; }
-  .big-link { display: inline-block; margin: 10px 0; padding: 10px 16px;
-              background: #1f6feb; color: white; border-radius: 6px;
-              text-decoration: none; font-weight: 600; }
-  .big-link:hover { background: #388bfd; }
-  details { margin-top: 12px; font-size: 12px; color: #8b949e; }
-  details pre { background: #0d1117; padding: 10px; border-radius: 6px;
-                overflow: auto; max-height: 200px; white-space: pre-wrap; }
-  video { width: 100%; max-width: 640px; border-radius: 6px;
-          margin: 10px 0; display: block; }
-  .editable { background: #0d1117; border: 1px solid #30363d; border-radius: 6px;
-              padding: 10px; margin-top: 6px; min-height: 40px; white-space: pre-wrap; }
-  .hint { color: #8b949e; font-size: 13px; margin: 0 0 12px; }
+  
+  /* Button Loading Spinner */
+  button.is-loading { color: transparent !important; pointer-events: none; }
+  button.is-loading::after {
+    content: ""; position: absolute; width: 20px; height: 20px;
+    border: 3px solid rgba(255,255,255,0.3); border-top-color: white;
+    border-radius: 50%; animation: spin 0.8s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* Output Sections & Animations */
+  .hidden { display: none !important; }
+  .animate-pop { animation: popIn 0.5s cubic-bezier(0.16, 1, 0.3, 1) forwards; }
+  @keyframes popIn {
+    0% { opacity: 0; transform: translateY(15px) scale(0.98); }
+    100% { opacity: 1; transform: translateY(0) scale(1); }
+  }
+
+  #meta-out { display: flex; gap: 24px; margin-top: 20px; flex-wrap: wrap; background: #0d1117; padding: 16px; border-radius: 8px; border: 1px solid var(--border); }
+  #thumb-preview { width: 100%; max-width: 280px; border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.3); object-fit: cover; }
+  .meta-text { flex: 1; min-width: 200px; }
+  .label { font-size: 12px; color: var(--text-muted); text-transform: uppercase; margin-top: 12px; font-weight: 600; letter-spacing: 0.5px; }
+  .label:first-child { margin-top: 0; }
+  .value { font-size: 15px; word-break: break-word; font-weight: 500; margin-top: 4px; }
+  .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; background: rgba(255,255,255,0.05); padding: 2px 6px; border-radius: 4px; font-size: 13px; }
+  
+  .big-link { 
+    display: inline-flex; align-items: center; gap: 8px; margin: 16px 0; padding: 12px 20px;
+    background: var(--accent); color: white; border-radius: 8px;
+    text-decoration: none; font-weight: 600; transition: all 0.2s; box-shadow: 0 4px 12px rgba(31, 111, 235, 0.2);
+  }
+  .big-link:hover { background: var(--accent-hover); transform: translateY(-2px); box-shadow: 0 6px 16px rgba(31, 111, 235, 0.4); }
+  
+  details { margin-top: 16px; font-size: 13px; color: var(--text-muted); background: #0d1117; border: 1px solid var(--border); border-radius: 8px; }
+  summary { padding: 12px 16px; cursor: pointer; font-weight: 600; user-select: none; }
+  details pre { margin: 0; padding: 0 16px 16px; border-top: 1px solid var(--border); overflow: auto; max-height: 250px; white-space: pre-wrap; font-family: monospace; color: #a5d6ff; }
+  
+  video { width: 100%; max-width: 640px; border-radius: 8px; margin: 16px 0; display: block; border: 1px solid var(--border); box-shadow: 0 8px 24px rgba(0,0,0,0.4); }
+  
+  .editable { 
+    background: #0d1117; border: 1px solid var(--border); border-radius: 8px;
+    padding: 12px 16px; margin-top: 8px; min-height: 44px; white-space: pre-wrap;
+    transition: border-color 0.2s; line-height: 1.6;
+  }
+  .editable:focus { outline: none; border-color: var(--primary); }
+  .hint { color: var(--text-muted); font-size: 14px; margin: 0 0 16px; line-height: 1.5; }
+
+  /* Toast Notifications */
+  #toast-container { position: fixed; top: 20px; right: 20px; z-index: 9999; display: flex; flex-direction: column; gap: 10px; pointer-events: none; }
+  .toast { 
+    background: var(--error); color: white; padding: 14px 20px; border-radius: 8px; 
+    box-shadow: 0 8px 24px rgba(0,0,0,0.4); font-weight: 500; font-size: 14px;
+    animation: toastSlideIn 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards;
+    display: flex; align-items: center; gap: 10px; max-width: 350px;
+  }
+  .toast.success { background: var(--success); }
+  @keyframes toastSlideIn {
+    0% { transform: translateX(100%); opacity: 0; }
+    100% { transform: translateX(0); opacity: 1; }
+  }
+  @keyframes toastFadeOut {
+    0% { transform: translateX(0); opacity: 1; }
+    100% { transform: translateX(100%); opacity: 0; }
+  }
+
+  /* Mobile Tweaks */
+  @media (max-width: 600px) {
+    header { padding: 16px 20px; }
+    main { padding: 20px 12px 60px; }
+    .card { padding: 16px; }
+    .row { flex-direction: column; }
+    button { width: 100%; }
+    #thumb-preview { max-width: 100%; }
+  }
 </style>
 </head>
 <body>
 
+<div id="toast-container"></div>
+
 <header>
   <h1>🎤 Vocals-Only Video Pipeline</h1>
   <p class="sub">YouTube URL → RapidAPI audio → clean → 16:9 video → AI metadata</p>
-  <div id="health" class="health"></div>
+  <div id="health" class="health">Checking system status...</div>
 </header>
 
 <main>
@@ -66,7 +176,7 @@
       <button id="btn-meta">Fetch metadata</button>
     </div>
     <div id="meta-out" class="hidden">
-      <img id="thumb-preview" alt="">
+      <img id="thumb-preview" alt="Video Thumbnail">
       <div class="meta-text">
         <div class="label">Title</div>
         <div id="meta-title" class="value"></div>
@@ -82,7 +192,7 @@
     <h2>2. Download audio (RapidAPI)</h2>
     <button id="btn-download">Download audio now</button>
     <div id="download-out" class="hidden">
-      <p>Original audio (download, clean it however you want, then come to Step 3):</p>
+      <p style="margin-bottom:0;">Original audio (download, clean it however you want, then come to Step 3):</p>
       <a id="download-link" href="#" download class="big-link">⬇ Download original audio</a>
       <details><summary>RapidAPI log</summary><pre id="download-log"></pre></details>
     </div>
@@ -90,10 +200,11 @@
 
   <section class="card disabled" id="step3">
     <h2>3. Upload your final audio</h2>
-    <p class="hint">Upload the file you just cleaned. The server will then remove
-      remaining silence and background noise automatically.</p>
-    <input type="file" id="file-input" accept="audio/*">
-    <button id="btn-clean">Remove silence + noise</button>
+    <p class="hint">Upload the file you just cleaned. The server will then remove remaining silence and background noise automatically.</p>
+    <div class="row">
+      <input type="file" id="file-input" accept="audio/*">
+      <button id="btn-clean">Remove silence + noise</button>
+    </div>
     <div id="clean-out" class="hidden">
       <a id="clean-link" href="#" download class="big-link">⬇ Download cleaned audio</a>
       <details><summary>Server log</summary><pre id="clean-log"></pre></details>
@@ -118,7 +229,7 @@
       <div id="ai-title" class="value editable" contenteditable="true"></div>
       <div class="label">Description</div>
       <div id="ai-desc" class="value editable" contenteditable="true"></div>
-      <button id="btn-copy">Copy both to clipboard</button>
+      <button id="btn-copy" style="margin-top: 16px; width: 100%;">Copy both to clipboard</button>
     </div>
   </section>
 
@@ -135,26 +246,54 @@ const state = {
 };
 
 const $ = id => document.getElementById(id);
-const show = el => el.classList.remove("hidden");
+const show = el => {
+  el.classList.remove("hidden");
+  el.classList.add("animate-pop");
+};
 const enableStep = el => el.classList.remove("disabled");
+const setLoading = (btnId, isLoading) => {
+  if(isLoading) $(btnId).classList.add("is-loading");
+  else $(btnId).classList.remove("is-loading");
+};
 
+// Custom Toast Notification Function (replaces alert)
+function showToast(message, type = "error") {
+  const container = $("toast-container");
+  const toast = document.createElement("div");
+  toast.className = `toast ${type === 'success' ? 'success' : ''}`;
+  toast.innerHTML = type === 'error' ? `⚠️ ${message}` : `✅ ${message}`;
+  
+  container.appendChild(toast);
+  setTimeout(() => {
+    toast.style.animation = "toastFadeOut 0.3s ease forwards";
+    setTimeout(() => toast.remove(), 300);
+  }, 4000);
+}
+
+// Health Check
 fetch("/api/health").then(r => r.json()).then(h => {
   const box = $("health");
   if (h.ok) {
-    box.textContent = "✅ FFmpeg detected — RapidAPI ready";
+    box.innerHTML = "✅ FFmpeg detected — RapidAPI ready";
     box.classList.add("ok");
+    box.classList.remove("err");
   } else {
-    box.textContent = "❌ Missing: " + h.missing.join(", ") + ". " + h.hint;
+    box.innerHTML = "❌ Missing: " + h.missing.join(", ") + ". " + h.hint;
     box.classList.add("err");
+    box.classList.remove("ok");
   }
+}).catch(() => {
+  const box = $("health");
+  box.innerHTML = "⚠️ Backend server not reachable";
+  box.classList.add("err");
 });
 
 // ---- STEP 1 ----
 $("btn-meta").onclick = async () => {
   const url = $("yt-url").value.trim();
-  if (!url) return alert("Paste a YouTube URL or ID");
+  if (!url) return showToast("Please paste a YouTube URL or ID");
 
-  $("btn-meta").textContent = "Fetching...";
+  setLoading("btn-meta", true);
   try {
     const res = await fetch("/api/metadata", {
       method: "POST",
@@ -180,17 +319,17 @@ $("btn-meta").onclick = async () => {
 
     show($("meta-out"));
     enableStep($("step2"));
+    showToast("Metadata fetched successfully!", "success");
   } catch (e) {
-    alert("Error: " + e.message);
+    showToast(e.message);
   } finally {
-    $("btn-meta").textContent = "Fetch metadata";
+    setLoading("btn-meta", false);
   }
 };
 
 // ---- STEP 2 ----
 $("btn-download").onclick = async () => {
-  $("btn-download").textContent = "Downloading via RapidAPI...";
-  $("btn-download").disabled = true;
+  setLoading("btn-download", true);
 
   try {
     const res = await fetch("/api/download", {
@@ -207,21 +346,20 @@ $("btn-download").onclick = async () => {
     $("download-log").textContent = (data.logs || []).join("\n");
     show($("download-out"));
     enableStep($("step3"));
+    showToast("Audio downloaded!", "success");
   } catch (e) {
-    alert("Error: " + e.message);
+    showToast(e.message);
   } finally {
-    $("btn-download").textContent = "Download audio now";
-    $("btn-download").disabled = false;
+    setLoading("btn-download", false);
   }
 };
 
 // ---- STEP 3 ----
 $("btn-clean").onclick = async () => {
   const file = $("file-input").files[0];
-  if (!file) return alert("Pick a file first");
+  if (!file) return showToast("Please pick a file first");
 
-  $("btn-clean").textContent = "Cleaning...";
-  $("btn-clean").disabled = true;
+  setLoading("btn-clean", true);
 
   const fd = new FormData();
   fd.append("file", file);
@@ -237,20 +375,19 @@ $("btn-clean").onclick = async () => {
     $("clean-log").textContent = (data.logs || []).join("\n");
     show($("clean-out"));
     enableStep($("step4"));
+    showToast("Audio cleaned successfully!", "success");
   } catch (e) {
-    alert("Error: " + e.message);
+    showToast(e.message);
   } finally {
-    $("btn-clean").textContent = "Remove silence + noise";
-    $("btn-clean").disabled = false;
+    setLoading("btn-clean", false);
   }
 };
 
 // ---- STEP 4 ----
 $("btn-video").onclick = async () => {
-  if (!state.cleaned_name) return alert("Clean audio first");
+  if (!state.cleaned_name) return showToast("Please clean audio first");
 
-  $("btn-video").textContent = "Building...";
-  $("btn-video").disabled = true;
+  setLoading("btn-video", true);
 
   try {
     const res = await fetch("/api/build_video", {
@@ -275,18 +412,17 @@ $("btn-video").onclick = async () => {
     $("video-player").src = data.video_url;
     show($("video-out"));
     enableStep($("step5"));
+    showToast("Video built successfully!", "success");
   } catch (e) {
-    alert("Error: " + e.message);
+    showToast(e.message);
   } finally {
-    $("btn-video").textContent = "Build video now";
-    $("btn-video").disabled = false;
+    setLoading("btn-video", false);
   }
 };
 
 // ---- STEP 5 ----
 $("btn-ai").onclick = async () => {
-  $("btn-ai").textContent = "Thinking...";
-  $("btn-ai").disabled = true;
+  setLoading("btn-ai", true);
 
   try {
     const res = await fetch("/api/ai_metadata", {
@@ -300,11 +436,11 @@ $("btn-ai").onclick = async () => {
     $("ai-title").textContent = data.title;
     $("ai-desc").textContent  = data.description;
     show($("ai-out"));
+    showToast("AI Metadata generated!", "success");
   } catch (e) {
-    alert("Error: " + e.message);
+    showToast(e.message);
   } finally {
-    $("btn-ai").textContent = "Generate with AI";
-    $("btn-ai").disabled = false;
+    setLoading("btn-ai", false);
   }
 };
 
@@ -312,8 +448,15 @@ $("btn-copy").onclick = () => {
   const t = $("ai-title").innerText;
   const d = $("ai-desc").innerText;
   navigator.clipboard.writeText(`TITLE:\n${t}\n\nDESCRIPTION:\n${d}`);
-  $("btn-copy").textContent = "Copied!";
-  setTimeout(() => $("btn-copy").textContent = "Copy both to clipboard", 1500);
+  
+  const originalText = $("btn-copy").textContent;
+  $("btn-copy").textContent = "✓ Copied to clipboard!";
+  $("btn-copy").style.background = "var(--success)";
+  
+  setTimeout(() => {
+    $("btn-copy").textContent = originalText;
+    $("btn-copy").style.background = "";
+  }, 2000);
 };
 </script>
 
