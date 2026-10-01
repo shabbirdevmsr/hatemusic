@@ -1,4 +1,4 @@
-"""Flask web app — RapidAPI download + AUTO silence removal + video + AI."""
+"""Flask web app wrapping the RapidAPI download pipeline."""
 
 import re
 import shutil
@@ -65,7 +65,9 @@ def api_health():
         "ok": not missing,
         "missing": missing,
         "hint": (
-            "Install FFmpeg and add it to PATH."
+            "Install FFmpeg and add it to PATH. "
+            "Windows: https://www.gyan.dev/ffmpeg/builds/ "
+            "(extract, add /bin to PATH, restart terminal)"
             if missing else ""
         ),
     })
@@ -96,7 +98,6 @@ def api_metadata():
         return jsonify({"success": False, "error": str(e)}), 400
 
 
-# ---- download + AUTO clean --------------------------------------------------
 @app.route("/api/download", methods=["POST"])
 def api_download():
     try:
@@ -104,50 +105,22 @@ def api_download():
         video_id = data.get("video_id") or extract_video_id(data.get("url", ""))
 
         logs = []
-
-        # 1. download raw mp3
         audio_url  = f"https://www.youtube.com/watch?v={video_id}"
         audio_path = download_audio(audio_url, video_id=video_id,
                                     log=lambda m: logs.append(str(m)))
 
-        logs.append("")
-        logs.append("--- Auto silence + noise removal (FFmpeg) ---")
-
-        # 2. auto-clean with FFmpeg
-        cleaned_path, stats = remove_silence(audio_path,
-                                             log=lambda m: logs.append(str(m)))
-
-        if not cleaned_path:
-            return jsonify({
-                "success": False,
-                "error": "Auto cleaning failed",
-                "logs": logs,
-            }), 500
-
-        # move cleaned file into audio/ (remove_silence already writes there
-        # if input is in audio/, but be safe)
-        final_path = Path(config.AUDIO_DIR) / cleaned_path.name
-        if cleaned_path != final_path:
-            if final_path.exists():
-                final_path.unlink()
-            shutil.move(str(cleaned_path), str(final_path))
-
         return jsonify({
             "success": True,
-            "video_id":     video_id,
-            "audio_name":   audio_path.name,           # raw
-            "audio_url":    f"/api/file/audio/{audio_path.name}",
-            "cleaned_name": final_path.name,           # cleaned
-            "cleaned_url":  f"/api/file/audio/{final_path.name}",
-            "stats":        stats,
-            "logs":         logs,
+            "video_id": video_id,
+            "audio_name": audio_path.name,
+            "audio_url": f"/api/file/audio/{audio_path.name}",
+            "logs": logs,
         })
     except Exception as e:
         traceback.print_exc()
         return jsonify({"success": False, "error": str(e)}), 500
 
 
-# ---- OPTIONAL: manual upload (replaces the auto-cleaned file) ---------------
 @app.route("/api/clean", methods=["POST"])
 def api_clean():
     try:
@@ -163,8 +136,7 @@ def api_clean():
         f.save(str(upload_path))
 
         logs = []
-        cleaned, stats = remove_silence(upload_path,
-                                        log=lambda m: logs.append(str(m)))
+        cleaned = remove_silence(upload_path, log=lambda m: logs.append(str(m)))
         if not cleaned:
             return jsonify({"success": False, "error": "Cleaning failed", "logs": logs}), 500
 
@@ -177,7 +149,6 @@ def api_clean():
             "success": True,
             "cleaned_name": final_path.name,
             "cleaned_url": f"/api/file/audio/{final_path.name}",
-            "stats": stats,
             "logs": logs,
         })
     except Exception as e:
@@ -243,16 +214,17 @@ def api_file(folder, name):
 
 
 # ============================================================
-# ENTRY (local dev only)
+# ENTRY (local dev only — Gunicorn runs "app:app" in production)
 # ============================================================
 
 if __name__ == "__main__":
     missing = check_ffmpeg()
     print("=" * 60)
-    print(" Vocals-Only Video Pipeline (RapidAPI + Auto FFmpeg Clean)")
+    print(" Vocals-Only Video Pipeline (RapidAPI + Flask)")
     print("=" * 60)
     if missing:
         print(f"WARNING: missing on PATH -> {', '.join(missing)}")
+        print("Install FFmpeg and add its /bin folder to PATH, then restart.")
     print(f"Local dev: http://127.0.0.1:{config.FLASK_PORT}")
     print()
     app.run(host="127.0.0.1", port=config.FLASK_PORT, debug=True)

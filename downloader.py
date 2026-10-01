@@ -1,25 +1,9 @@
 """Download audio from YouTube using the RapidAPI YouTube Download API.
 
-Real response shape (verified with curl):
-
-Step 1 — GET /ajax/download.php
-{
-  "success": true,
-  "id": "v2_stream_bf04e648f1ed13d19378",
-  "progress_url": "https://p.savenow.to/api/progress?id=...&src=rapidapi",
-  "title": "...",
-  "thumbnail_url": "...",
-  "format": "mp3"
-}
-
-Step 2 — GET progress_url
-{
-  "success": 1,
-  "progress": 1000,
-  "download_url": "https://bernice23.savenow.to/api/v2/download/...",
-  "text": "Finished",
-  "title": "..."
-}
+Flow:
+  1. GET /ajax/download.php  -> submit job, returns `id` + `progress_url`
+  2. GET progress_url        -> poll until progress >= 1000, then get download_url
+  3. GET download_url        -> save the MP3 locally
 """
 
 import time
@@ -46,7 +30,6 @@ def download_audio(video_url: str, video_id: str = None, log=print) -> Path:
 
     Path(AUDIO_DIR).mkdir(parents=True, exist_ok=True)
 
-    # ---------- Step 1: submit job ----------
     log(f"[RapidAPI] Submitting download job for {video_id or video_url}...")
 
     params = {"url": video_url, "format": "mp3"}
@@ -79,9 +62,8 @@ def download_audio(video_url: str, video_id: str = None, log=print) -> Path:
     if title:
         log(f"[RapidAPI] Title : {title}")
 
-    # ---------- Step 2: poll progress ----------
     download_url = None
-    deadline = time.time() + 600  # 10 minutes max
+    deadline = time.time() + 600
 
     while time.time() < deadline:
         pr = requests.get(progress_url, timeout=30)
@@ -94,7 +76,6 @@ def download_audio(video_url: str, video_id: str = None, log=print) -> Path:
         state    = pr.json()
         progress = state.get("progress", 0)
 
-        # progress ranges 0..1000, 1000 means finished
         if progress >= 1000:
             download_url = state.get("download_url")
             if download_url:
@@ -108,7 +89,6 @@ def download_audio(video_url: str, video_id: str = None, log=print) -> Path:
 
     log("[RapidAPI] Download URL ready, saving file...")
 
-    # ---------- Step 3: save the MP3 ----------
     stem = video_id or job_id
     out  = Path(AUDIO_DIR) / f"{stem}.mp3"
 
