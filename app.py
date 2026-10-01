@@ -1,4 +1,4 @@
-"""Flask web app wrapping the RapidAPI download pipeline."""
+"""Flask web app — also serves files for the Telegram bot."""
 
 import re
 import shutil
@@ -61,17 +61,64 @@ def index():
 @app.route("/api/health")
 def api_health():
     missing = check_ffmpeg()
-    return jsonify({
-        "ok": not missing,
-        "missing": missing,
-        "hint": (
-            "Install FFmpeg and add it to PATH. "
-            "Windows: https://www.gyan.dev/ffmpeg/builds/ "
-            "(extract, add /bin to PATH, restart terminal)"
-            if missing else ""
-        ),
-    })
+    return jsonify({"ok": not missing, "missing": missing})
 
+
+# ---------- DIRECT FILE SERVER (for the Telegram bot) ----------
+
+@app.route("/files/audio/<path:name>")
+def serve_audio(name):
+    return send_from_directory(config.AUDIO_DIR, name, as_attachment=True)
+
+
+@app.route("/files/video/<path:name>")
+def serve_video(name):
+    return send_from_directory(config.VIDEO_DIR, name, as_attachment=True)
+
+
+@app.route("/files/image/<path:name>")
+def serve_image(name):
+    return send_from_directory(config.IMAGE_DIR, name, as_attachment=False)
+
+
+# ---------- BOT → APP: save a file from the bot and return a URL ----------
+
+@app.route("/api/upload_from_bot", methods=["POST"])
+def api_upload_from_bot():
+    """The bot POSTs a file here; we save it and return a public URL."""
+    try:
+        if "file" not in request.files:
+            return jsonify({"success": False, "error": "no file"}), 400
+
+        f = request.files["file"]
+        kind = request.form.get("kind", "audio")   # "audio" | "video"
+        safe = secure_filename(f.filename or "file.bin")
+
+        if kind == "video":
+            dest_dir = Path(config.VIDEO_DIR)
+            url_prefix = "video"
+        else:
+            dest_dir = Path(config.AUDIO_DIR)
+            url_prefix = "audio"
+
+        dest = dest_dir / safe
+        f.save(str(dest))
+
+        size_mb = dest.stat().st_size / (1024 * 1024)
+        url = f"{request.host_url.rstrip('/')}/files/{url_prefix}/{safe}"
+
+        return jsonify({
+            "success": True,
+            "url": url,
+            "name": safe,
+            "size_mb": round(size_mb, 2),
+        })
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+# ---------- existing pipeline routes (unchanged) ----------
 
 @app.route("/api/metadata", methods=["POST"])
 def api_metadata():
@@ -79,12 +126,10 @@ def api_metadata():
         data = request.get_json(force=True)
         video_id = extract_video_id(data.get("url", ""))
         meta = get_youtube_metadata(video_id)
-
         thumb_name = None
         if meta.get("thumbnail"):
             path = download_thumbnail(meta["thumbnail"], video_id)
             thumb_name = path.name
-
         return jsonify({
             "success": True,
             "video_id": video_id,
@@ -103,12 +148,10 @@ def api_download():
     try:
         data = request.get_json(force=True)
         video_id = data.get("video_id") or extract_video_id(data.get("url", ""))
-
         logs = []
         audio_url  = f"https://www.youtube.com/watch?v={video_id}"
         audio_path = download_audio(audio_url, video_id=video_id,
                                     log=lambda m: logs.append(str(m)))
-
         return jsonify({
             "success": True,
             "video_id": video_id,
@@ -125,26 +168,19 @@ def api_download():
 def api_clean():
     try:
         if "file" not in request.files:
-            return jsonify({"success": False, "error": "No file uploaded"}), 400
-
+            return jsonify({"success": False, "error": "No file"}), 400
         f = request.files["file"]
-        if not f.filename:
-            return jsonify({"success": False, "error": "Empty filename"}), 400
-
         safe = secure_filename(f.filename)
         upload_path = Path(config.UPLOAD_DIR) / safe
         f.save(str(upload_path))
-
         logs = []
         cleaned = remove_silence(upload_path, log=lambda m: logs.append(str(m)))
         if not cleaned:
             return jsonify({"success": False, "error": "Cleaning failed", "logs": logs}), 500
-
         final_path = Path(config.AUDIO_DIR) / cleaned.name
         if final_path.exists():
             final_path.unlink()
         shutil.move(str(cleaned), str(final_path))
-
         return jsonify({
             "success": True,
             "cleaned_name": final_path.name,
@@ -163,20 +199,14 @@ def api_build_video():
         data = request.get_json(force=True)
         audio_name = data["audio_name"]
         video_id   = data["video_id"]
-
         audio_path = Path(config.AUDIO_DIR) / audio_name
-        if not audio_path.exists():
-            return jsonify({"success": False, "error": "Audio not found",
-                            "logs": logs}), 404
-
         thumb_path = Path(config.IMAGE_DIR) / f"{video_id}.jpg"
+        if not audio_path.exists():
+            return jsonify({"success": False, "error": "Audio not found", "logs": logs}), 404
         if not thumb_path.exists():
-            return jsonify({"success": False, "error": "Thumbnail not found",
-                            "logs": logs}), 404
-
+            return jsonify({"success": False, "error": "Thumbnail not found", "logs": logs}), 404
         video_path = create_video(thumb_path, audio_path,
                                   log=lambda m: logs.append(str(m)))
-
         return jsonify({
             "success": True,
             "video_name": video_path.name,
@@ -185,18 +215,14 @@ def api_build_video():
         })
     except Exception as e:
         traceback.print_exc()
-        return jsonify({"success": False, "error": str(e),
-                        "logs": logs}), 500
+        return jsonify({"success": False, "error": str(e), "logs": logs}), 500
 
 
 @app.route("/api/ai_metadata", methods=["POST"])
 def api_ai_metadata():
     try:
         data = request.get_json(force=True)
-        meta = generate_metadata(
-            data.get("title", ""),
-            data.get("description", ""),
-        )
+        meta = generate_metadata(data.get("title", ""), data.get("description", ""))
         return jsonify({"success": True, **meta})
     except Exception as e:
         traceback.print_exc()
@@ -216,10 +242,6 @@ def api_file(folder, name):
     return send_from_directory(allowed[folder], name, as_attachment=False)
 
 
-# ============================================================
-# ENTRY (local dev only — Gunicorn runs "app:app" in production)
-# ============================================================
-
 if __name__ == "__main__":
     missing = check_ffmpeg()
     print("=" * 60)
@@ -227,7 +249,6 @@ if __name__ == "__main__":
     print("=" * 60)
     if missing:
         print(f"WARNING: missing on PATH -> {', '.join(missing)}")
-        print("Install FFmpeg and add its /bin folder to PATH, then restart.")
     print(f"Local dev: http://127.0.0.1:{config.FLASK_PORT}")
     print()
     app.run(host="127.0.0.1", port=config.FLASK_PORT, debug=True)
