@@ -1,0 +1,19 @@
+# Python
+__pycache__/
+*.pyc
+venv/
+.venv/
+.env
+
+# App working dirs
+audio/
+images/
+videos/
+uploads/
+state/
+
+# OS
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
