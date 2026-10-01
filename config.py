@@ -3,34 +3,30 @@
 import os
 
 # ============================================================
-# Secrets — read from environment, with local fallbacks
+# RapidAPI YouTube Download
+# ============================================================
+RAPIDAPI_KEY = os.getenv(
+    "RAPIDAPI_KEY",
+    "41ac3cccb3msh09cce7da9f3d0b3p17f5d8jsne0438b971bdd",
+)
+RAPIDAPI_HOST         = "youtube-info-download-api.p.rapidapi.com"
+RAPIDAPI_DOWNLOAD_URL = f"https://{RAPIDAPI_HOST}/ajax/download.php"
+RAPIDAPI_PROGRESS_URL = f"https://{RAPIDAPI_HOST}/ajax/progress"
+
+# ============================================================
+# Groq AI
 # ============================================================
 GROQ_API_KEY = os.getenv(
     "GROQ_API_KEY",
     "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",
 )
-
-YT_API_KEY = os.getenv("YT_API_KEY", "foo1")
-
-# ---- yt-dlp cookie options ----
-USE_BROWSER_COOKIES = os.getenv("USE_BROWSER_COOKIES") or None
-COOKIE_FILE         = os.getenv("COOKIE_FILE") or None
-
-# ============================================================
-# yt-dlp
-# ============================================================
-AUDIO_FORMAT  = "mp3"     # mp3, m4a, wav, flac, opus
-AUDIO_QUALITY = "0"       # 0 = best VBR; or "320K" for fixed bitrate
-
-# ============================================================
-# Groq AI
-# ============================================================
 GROQ_MODEL = "openai/gpt-oss-120b"
 
 # ============================================================
 # YouTube metadata mirror
 # ============================================================
 YT_API_URL = "https://ytapi.apps.mattw.io/v3/videos"
+YT_API_KEY = os.getenv("YT_API_KEY", "foo1")
 
 # ============================================================
 # Video
