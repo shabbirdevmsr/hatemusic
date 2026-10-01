@@ -1,9 +1,18 @@
-"""Combine a static image + audio into a 1920x1080 YouTube-ratio MP4."""
+"""Combine a static image + audio into a 1920x1080 YouTube-ratio MP4.
+
+Key trick: a still image does not need 25 fps. Encoding at low fps cuts
+processing time by 5-25x, so the encode finishes well inside any HTTP
+timeout used by the host (Blitz, Render, Railway, etc.).
+"""
 
 import subprocess
 from pathlib import Path
 
 from config import VIDEO_WIDTH, VIDEO_HEIGHT, VIDEO_DIR
+
+# 1 fps is valid on YouTube and dramatically faster to encode.
+# Use 2 or 5 if you prefer slightly smoother playback metadata.
+IMAGE_FPS = 1
 
 
 def get_duration(filename) -> float:
@@ -40,17 +49,25 @@ def create_video(image_path, audio_path, log=print) -> Path:
 
     cmd = [
         "ffmpeg", "-y",
+        # --- image input: loop forever, only read it at IMAGE_FPS ---
         "-f", "image2",
+        "-framerate", str(IMAGE_FPS),
         "-loop", "1",
         "-i", str(image_path),
+        # --- audio input ---
         "-i", str(audio_path),
+        # --- video filter ---
         "-vf", vf,
+        # --- video codec ---
         "-c:v", "libx264",
-        "-preset", "veryfast",
+        "-preset", "ultrafast",     # fastest preset; fine for a still frame
         "-tune", "stillimage",
+        "-r", str(IMAGE_FPS),       # output frame rate
         "-pix_fmt", "yuv420p",
+        # --- audio codec ---
         "-c:a", "aac",
         "-b:a", "192k",
+        # --- stop when the shortest stream ends (audio) ---
         "-shortest",
         "-movflags", "+faststart",
         str(out),
@@ -63,12 +80,18 @@ def create_video(image_path, audio_path, log=print) -> Path:
     result = subprocess.run(cmd, capture_output=True, text=True)
 
     if result.returncode != 0:
-        log("FFmpeg stderr:\n" + result.stderr[-4000:])
-        raise RuntimeError(f"FFmpeg video build failed (exit {result.returncode})")
+        # Show only the LAST ~40 lines so the log stays readable
+        tail = "\n".join(result.stderr.splitlines()[-40:])
+        log("FFmpeg stderr (tail):\n" + tail)
+        raise RuntimeError(
+            f"FFmpeg video build failed (exit {result.returncode}). "
+            f"See log tail above."
+        )
 
     if not out.exists() or out.stat().st_size == 0:
         raise RuntimeError("FFmpeg exited 0 but produced no output")
 
     size_mb = out.stat().st_size / (1024 * 1024)
-    log(f"Video saved: {out}  ({size_mb:.2f} MB)")
+    dur = get_duration(out)
+    log(f"Video saved: {out}  ({size_mb:.2f} MB, {dur:.1f}s)")
     return out
