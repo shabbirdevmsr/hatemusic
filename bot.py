@@ -1,15 +1,14 @@
 """Telegram bot — vocals-only video pipeline.
 
-Flow:
-  1. Send a YT link  → bot sends thumbnail + raw audio + auto-cleaned audio
-  2. (Optional) Upload your own audio → bot auto-cleans it
-  3. Send another YT link → bot uses that link's thumbnail + last cleaned audio
-     → builds 1920×1080 MP4 → sends the video
-  4. Tap "📝 Get Title & Description" → AI generates a caption
-     with [🔄 Regenerate] and [✏️ Edit with prompt] buttons
+Uses the local Bot API server at telegram-bot-api.msr.blitz.cloud
+(raises the upload limit from 50 MB to ~2000 MB).
 
-Uses a local Telegram Bot API server (default: telegram-bot-api.msr.blitz.cloud)
-which raises the upload limit from 50 MB to ~2000 MB.
+Flow:
+  1. Send a YT link   → bot sends thumbnail + raw audio + auto-cleaned audio
+  2. (Optional) Upload your own audio → bot auto-cleans it
+  3. Send another YT link → bot builds 1920×1080 MP4 → sends the video
+  4. Tap "📝 Get Title & Description" → AI caption
+     with [🔄 Regenerate] + [✏️ Edit with prompt]
 
 Run:
     python bot.py
@@ -54,10 +53,12 @@ BOT_TOKEN = os.getenv(
     "BOT_TOKEN",
     "6965134031:AAHdZxo1I4WuV4pvhEgfN24UOzPPL2R76oE",
 )
+
+# Local Bot API server (2 GB uploads instead of 50 MB)
 LOCAL_API = os.getenv(
     "LOCAL_TELEGRAM_API",
     "https://telegram-bot-api.msr.blitz.cloud",
-)
+).rstrip("/")
 
 logging.basicConfig(
     level=logging.INFO,
@@ -67,20 +68,33 @@ log = logging.getLogger("bot")
 
 
 # ============================================================
-# BOT + DISPATCHER (using local Bot API server)
+# BOT + DISPATCHER (local Bot API server)
 # ============================================================
 
-if LOCAL_API:
-    log.info("Using local Telegram Bot API server: %s", LOCAL_API)
-    _server  = TelegramAPIServer.from_base(LOCAL_API, is_local=True)
-    _session = AiohttpSession(api=_server)
-else:
-    log.info("Using standard Telegram Bot API (cloud, 50 MB limit)")
-    _session = AiohttpSession()
+def build_session() -> AiohttpSession:
+    """Return an AiohttpSession using the local Bot API server.
+
+    is_local=True tells aiogram it can:
+      - upload files > 50 MB
+      - pass local file paths directly to the server
+      - download files without hitting the cloud API
+    """
+    if not LOCAL_API:
+        log.info("No LOCAL_TELEGRAM_API set — using cloud API (50 MB limit)")
+        return AiohttpSession()
+
+    try:
+        server = TelegramAPIServer.from_base(LOCAL_API, is_local=True)
+        log.info("Using local Bot API server: %s", LOCAL_API)
+        return AiohttpSession(api=server)
+    except Exception as e:
+        log.exception("Local API config failed, falling back to cloud: %s", e)
+        return AiohttpSession()
+
 
 bot = Bot(
     token=BOT_TOKEN,
-    session=_session,
+    session=build_session(),
     default=DefaultBotProperties(parse_mode=ParseMode.HTML),
 )
 
@@ -127,8 +141,8 @@ def kb_ai_initial():
 
 def kb_ai_after():
     return InlineKeyboardMarkup(inline_keyboard=[[
-        InlineKeyboardButton(text="🔄 Regenerate",        callback_data="regen_ai"),
-        InlineKeyboardButton(text="✏️ Edit with prompt",  callback_data="edit_ai"),
+        InlineKeyboardButton(text="🔄 Regenerate",       callback_data="regen_ai"),
+        InlineKeyboardButton(text="✏️ Edit with prompt", callback_data="edit_ai"),
     ]])
 
 
@@ -139,8 +153,8 @@ def fmt_ai(result: dict) -> str:
     )
 
 
-async def safe_send_document(msg: Message, path: Path, caption: str):
-    """Send a document, but never crash if the file is missing."""
+async def safe_send_document(msg: Message, path, caption: str):
+    """Send a document; never crash if the file is missing."""
     p = Path(path)
     if not p.exists():
         log.warning("file missing, cannot send: %s", p)
@@ -154,7 +168,7 @@ async def safe_send_document(msg: Message, path: Path, caption: str):
 
 
 # ============================================================
-# /start, /help, /reset
+# COMMANDS
 # ============================================================
 
 @router.message(CommandStart())
@@ -300,7 +314,7 @@ async def handle_edit_prompt(msg: Message, state: FSMContext):
 
 @router.message(F.audio | F.voice | F.document)
 async def handle_audio_upload(msg: Message, state: FSMContext):
-    # ---- pick the right file ----
+    # pick the right file object
     if msg.audio:
         tg_file = msg.audio
         ext = ".mp3"
@@ -313,8 +327,10 @@ async def handle_audio_upload(msg: Message, state: FSMContext):
         mime = (msg.document.mime_type or "").lower()
         looks_audio = (
             mime.startswith("audio/")
-            or name.lower().endswith((".mp3", ".wav", ".m4a", ".flac",
-                                      ".ogg", ".opus", ".aac"))
+            or name.lower().endswith(
+                (".mp3", ".wav", ".m4a", ".flac",
+                 ".ogg", ".opus", ".aac")
+            )
         )
         if not looks_audio:
             await msg.answer("That file doesn't look like audio.")
@@ -354,12 +370,11 @@ async def handle_audio_upload(msg: Message, state: FSMContext):
 
 
 # ============================================================
-# TEXT MESSAGE — either source link or build link
+# TEXT MESSAGE — source link or build link
 # ============================================================
 
 @router.message(F.text)
 async def handle_text(msg: Message, state: FSMContext):
-    # ---- must be a YouTube link ----
     try:
         video_id = extract_video_id(msg.text)
     except ValueError:
@@ -378,7 +393,6 @@ async def handle_text(msg: Message, state: FSMContext):
 # -------- SOURCE MODE: download + auto-clean --------------------------------
 
 async def do_source(msg: Message, state: FSMContext, video_id: str):
-    # ---- metadata + thumbnail ----
     await bot.send_chat_action(msg.chat.id, ChatAction.TYPING)
     try:
         meta = await asyncio.to_thread(get_youtube_metadata, video_id)
@@ -409,7 +423,6 @@ async def do_source(msg: Message, state: FSMContext, video_id: str):
         except Exception as e:
             log.warning("photo send failed: %s", e)
 
-    # ---- download audio ----
     status = await msg.answer("📥 Downloading audio via RapidAPI...")
     try:
         audio_path = await asyncio.to_thread(
@@ -424,7 +437,6 @@ async def do_source(msg: Message, state: FSMContext, video_id: str):
 
     await safe_send_document(msg, audio_path, "🎵 Raw audio (before cleaning)")
 
-    # ---- auto clean ----
     await status.edit_text("🧹 Auto-removing silence + noise...")
     cleaned = None
     try:
@@ -436,7 +448,6 @@ async def do_source(msg: Message, state: FSMContext, video_id: str):
     if cleaned and Path(cleaned).exists():
         await safe_send_document(msg, cleaned, "✅ Auto-cleaned audio")
 
-    # ---- save state → build mode ----
     await state.update_data(
         mode="build",
         source_video_id=video_id,
@@ -453,7 +464,7 @@ async def do_source(msg: Message, state: FSMContext, video_id: str):
     )
 
 
-# -------- BUILD MODE: thumbnail from link + cleaned audio → MP4 -------------
+# -------- BUILD MODE: thumbnail + cleaned audio → MP4 -----------------------
 
 async def do_build(msg: Message, state: FSMContext, video_id: str):
     data = await state.get_data()
@@ -466,7 +477,6 @@ async def do_build(msg: Message, state: FSMContext, video_id: str):
         await state.update_data(mode="source")
         return
 
-    # ---- metadata + thumbnail ----
     status = await msg.answer("🖼 Fetching thumbnail...")
     try:
         meta = await asyncio.to_thread(get_youtube_metadata, video_id)
@@ -486,7 +496,6 @@ async def do_build(msg: Message, state: FSMContext, video_id: str):
             await status.edit_text(f"❌ Thumbnail failed: <code>{e}</code>")
             return
 
-    # ---- build MP4 ----
     await status.edit_text("🎬 Building 1920×1080 MP4...")
     try:
         video_path = await asyncio.to_thread(
@@ -497,7 +506,6 @@ async def do_build(msg: Message, state: FSMContext, video_id: str):
         await status.edit_text(f"❌ Build failed: <code>{e}</code>")
         return
 
-    # ---- send ----
     size_mb = Path(video_path).stat().st_size / (1024 * 1024)
     await status.edit_text(f"📤 Uploading video ({size_mb:.1f} MB)...")
 
@@ -509,8 +517,15 @@ async def do_build(msg: Message, state: FSMContext, video_id: str):
     except Exception as e:
         log.exception("video send failed")
         await msg.answer(f"⚠️ Could not send video: <code>{e}</code>")
+        # try as a document instead — local Bot API supports big files
+        try:
+            await msg.answer_document(
+                FSInputFile(video_path),
+                caption="⚠️ Sent as document because video send failed.",
+            )
+        except Exception as e2:
+            await msg.answer(f"⚠️ Document send also failed: <code>{e2}</code>")
 
-    # ---- update state, show AI button ----
     await state.update_data(
         mode="build",
         video_id=video_id,
@@ -543,7 +558,10 @@ async def main():
     for d in (config.AUDIO_DIR, config.IMAGE_DIR, config.VIDEO_DIR, config.UPLOAD_DIR):
         Path(d).mkdir(parents=True, exist_ok=True)
 
-    # clear pending updates so old messages don't replay
+    # sanity check: who am I?
+    me = await bot.get_me()
+    log.info("Bot identity: @%s (id=%s)", me.username, me.id)
+
     await bot.delete_webhook(drop_pending_updates=True)
     await dp.start_polling(bot)
 
