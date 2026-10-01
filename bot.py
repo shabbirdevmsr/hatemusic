@@ -1,34 +1,26 @@
-"""Telegram bot — vocals-only video pipeline.
+"""Telegram bot — vocals-only video pipeline (web-upload flow).
 
 Flow:
   1. User sends a YouTube link.
-     → Bot sends the thumbnail
-     → Bot downloads the audio, uploads it, and replies with a DIRECT DOWNLOAD LINK
-     → Bot shows an inline button [✅ Done]
+     → Bot sends the thumbnail + direct audio download link + [✅ Done]
 
   2. User taps [✅ Done].
-     → Bot asks the user to upload their cleaned vocal audio.
-
-  3. User uploads audio.
-     → Bot removes silence + noise
-     → Bot builds a 1920x1080 MP4 (thumbnail from step 1)
-     → Bot uploads the video and replies with:
-         • DIRECT VIDEO DOWNLOAD LINK
-         • AI title (copyable)
-         • AI description (copyable)
-         • buttons [🔄 Regenerate] [✏️ Edit with prompt]
-
-  4. User taps a button → AI regenerates the caption.
-
-Uses the local Bot API server (2 GB uploads).
+     → Bot replies with an UPLOAD LINK:
+         https://your-app.blitz.cloud/upload/<sid>
+     → User opens it in a browser, uploads their cleaned audio.
+     → Bot detects the upload, runs FFmpeg clean + video build,
+       and replies with the DIRECT VIDEO LINK + AI title + description.
+     → Buttons: [🔄 Regenerate] [✏️ Edit with prompt]
 """
 
 import asyncio
 import logging
 import os
 import re
+import time
 from pathlib import Path
 
+import requests
 from aiogram import Bot, Dispatcher, F, Router
 from aiogram.client.default import DefaultBotProperties
 from aiogram.client.session.aiohttp import AiohttpSession
@@ -51,6 +43,7 @@ from ai import generate_metadata
 from createvideo import create_video
 from downloader import download_audio
 from remove_silence import remove_silence
+from sessions import create_session, get_session, update_session
 from thumbnail import download_thumbnail, get_youtube_metadata
 
 
@@ -60,12 +53,15 @@ from thumbnail import download_thumbnail, get_youtube_metadata
 
 BOT_TOKEN = os.getenv(
     "BOT_TOKEN",
-    "6965134031:AAHdZxo1I4WuV4pvhEgfN24UOzPPL2R76oE",
+    "7907530787:AAEOfzOVPuCHfqMuOFVNMYQR6go5yI_fJmA",
 )
-
 LOCAL_API = os.getenv(
     "LOCAL_TELEGRAM_API",
     "https://telegram-bot-api.msr.blitz.cloud",
+).rstrip("/")
+FILE_SERVER = os.getenv(
+    "FILE_SERVER_URL",
+    "https://your-app.blitz.cloud",   # ← change to your Blitz URL
 ).rstrip("/")
 
 logging.basicConfig(
@@ -76,20 +72,14 @@ log = logging.getLogger("bot")
 
 
 # ============================================================
-# BOT SETUP — local Bot API server (2 GB upload limit)
+# BOT SETUP
 # ============================================================
 
 def build_session() -> AiohttpSession:
-    """Route API calls through the local Bot API server.
-
-    NOTE: we do NOT pass is_local=True, because the bot and the Bot API server
-    live on different machines — passing local paths would break uploads.
-    We upload the file bytes as multipart form data instead.
-    """
     if not LOCAL_API:
-        log.info("No LOCAL_TELEGRAM_API — using cloud API (50 MB limit)")
+        log.info("Using cloud API (50 MB limit)")
         return AiohttpSession()
-    server = TelegramAPIServer.from_base(LOCAL_API)
+    server = TelegramAPIServer.from_base(LOCAL_API)  # NOT is_local
     log.info("Using local Bot API server: %s", LOCAL_API)
     return AiohttpSession(api=server)
 
@@ -125,39 +115,40 @@ def extract_video_id(text: str) -> str:
         m = re.search(p, text)
         if m:
             return m.group(1)
-    raise ValueError("No YouTube video ID found in that text.")
+    raise ValueError("No YouTube video ID found.")
 
 
-async def upload_and_get_url(chat_id: int, file_path, caption: str) -> str:
-    """Upload a file as a Telegram document, then return a direct download URL
-    served by the local Bot API server:
-
-        {LOCAL_API}/file/bot{TOKEN}/{file_path}
-    """
-    p = Path(file_path)
-    if not p.exists():
-        raise FileNotFoundError(f"Missing file: {p}")
-
-    sent = await bot.send_document(chat_id, FSInputFile(p), caption=caption)
-    tg_file = await bot.get_file(sent.document.file_id)
-    return f"{LOCAL_API}/file/bot{BOT_TOKEN}/{tg_file.file_path}"
+def upload_to_file_server(local_path: Path, kind: str = "audio") -> str:
+    url = f"{FILE_SERVER}/api/upload_from_bot"
+    with open(local_path, "rb") as f:
+        r = requests.post(
+            url,
+            files={"file": (local_path.name, f, "application/octet-stream")},
+            data={"kind": kind},
+            timeout=300,
+        )
+    r.raise_for_status()
+    data = r.json()
+    if not data.get("success"):
+        raise RuntimeError(data.get("error", "upload error"))
+    log.info("Uploaded %s -> %s", local_path.name, data["url"])
+    return data["url"]
 
 
 class S(StatesGroup):
-    awaiting_audio  = State()
     editing_caption = State()
 
 
-def kb_done():
+def kb_done(sid):
     return InlineKeyboardMarkup(inline_keyboard=[[
-        InlineKeyboardButton(text="✅ Done", callback_data="start_upload")
+        InlineKeyboardButton(text="✅ Done", callback_data=f"done:{sid}")
     ]])
 
 
-def kb_ai():
+def kb_ai(sid):
     return InlineKeyboardMarkup(inline_keyboard=[[
-        InlineKeyboardButton(text="🔄 Regenerate",       callback_data="regen_ai"),
-        InlineKeyboardButton(text="✏️ Edit with prompt", callback_data="edit_ai"),
+        InlineKeyboardButton(text="🔄 Regenerate",       callback_data=f"regen:{sid}"),
+        InlineKeyboardButton(text="✏️ Edit with prompt", callback_data=f"edit:{sid}"),
     ]])
 
 
@@ -198,159 +189,48 @@ async def cmd_reset(msg: Message, state: FSMContext):
     await msg.answer("🔄 Reset. Send a YouTube link to start.")
 
 
-@router.message(Command("help"))
-async def cmd_help(msg: Message):
-    await msg.answer(
-        "<b>How it works</b>\n\n"
-        "1. Send a YouTube link → thumbnail + a direct audio download link\n"
-        "2. Tap <b>✅ Done</b>\n"
-        "3. Upload your cleaned vocal audio\n"
-        "4. I clean it + build the 1920×1080 MP4\n"
-        "5. You get a direct video download link + AI title + description\n"
-        "6. Use <b>🔄 Regenerate</b> or <b>✏️ Edit with prompt</b> as needed\n"
-    )
-
-
 # ============================================================
-# EDIT-PROMPT HANDLER (must run before the YT-link handler)
+# EDIT-PROMPT HANDLER
 # ============================================================
 
 @router.message(S.editing_caption, F.text)
 async def handle_edit_prompt(msg: Message, state: FSMContext):
     data = await state.get_data()
-    title = data.get("orig_title", "")
-    desc  = data.get("orig_desc", "")
+    sid = data.get("edit_sid")
+    s = get_session(sid) if sid else None
+    if not s:
+        await msg.answer("❌ Session expired. Send a new YouTube link.")
+        await state.set_state(None)
+        return
+
+    title = s.get("orig_title", "")
+    desc  = s.get("orig_desc", "")
     instruction = msg.text.strip()
 
     wait = await msg.answer("🤖 Regenerating with your instruction...")
     try:
-        ai = await asyncio.to_thread(
-            generate_metadata, title, desc, instruction
-        )
+        ai = await asyncio.to_thread(generate_metadata, title, desc, instruction)
     except Exception as e:
         log.exception("ai edit failed")
         await wait.edit_text(f"❌ AI failed: <code>{e}</code>")
         await state.set_state(None)
         return
 
-    await state.update_data(ai_result=ai)
+    update_session(sid, ai_result=ai)
+    video_url = s.get("video_url", "")
     await state.set_state(None)
 
-    await wait.edit_text(
-        fmt_caption_block(ai["title"], ai["description"]),
-        reply_markup=kb_ai(),
-    )
-
-
-# ============================================================
-# AUDIO UPLOAD (only in awaiting_audio state)
-# ============================================================
-
-@router.message(S.awaiting_audio, F.audio | F.voice | F.document)
-async def handle_audio_upload(msg: Message, state: FSMContext):
-    data = await state.get_data()
-
-    # pick the right object
-    if msg.audio:
-        tg_file = msg.audio
-        ext = ".mp3"
-    elif msg.voice:
-        tg_file = msg.voice
-        ext = ".ogg"
-    else:
-        tg_file = msg.document
-        name = msg.document.file_name or "audio.bin"
-        ext = Path(name).suffix or ".mp3"
-
-    Path(config.UPLOAD_DIR).mkdir(parents=True, exist_ok=True)
-    dest = Path(config.UPLOAD_DIR) / f"tg_{msg.from_user.id}_{msg.message_id}{ext}"
-
-    status = await msg.answer("📥 Downloading your audio from Telegram...")
     try:
-        await bot.download(tg_file, destination=dest)
-    except Exception as e:
-        log.exception("telegram download failed")
-        await status.edit_text(f"❌ Download failed: <code>{e}</code>")
-        return
-
-    # ---- remove silence + noise ----
-    await status.edit_text("🧹 Removing silence + background noise...")
-    try:
-        cleaned = await asyncio.to_thread(remove_silence, dest)
-    except Exception as e:
-        log.exception("clean failed")
-        await status.edit_text(f"❌ Cleaning failed: <code>{e}</code>")
-        return
-
-    if not cleaned or not Path(cleaned).exists():
-        await status.edit_text("❌ Cleaning produced no output.")
-        return
-
-    # ---- build video ----
-    thumb_path = data.get("thumb_path")
-    if not thumb_path or not Path(thumb_path).exists():
-        await status.edit_text(
-            "❌ Thumbnail missing. Send the YouTube link again."
+        await wait.edit_text(
+            build_ready_message(video_url, ai["title"], ai["description"]),
+            reply_markup=kb_ai(sid),
+            disable_web_page_preview=True,
         )
-        await state.set_state(None)
-        return
-
-    await status.edit_text("🎬 Building 1920×1080 MP4...")
-    try:
-        video_path = await asyncio.to_thread(
-            create_video, thumb_path, Path(cleaned)
+    except Exception:
+        await wait.edit_text(
+            fmt_caption_block(ai["title"], ai["description"]),
+            reply_markup=kb_ai(sid),
         )
-    except Exception as e:
-        log.exception("video build failed")
-        await status.edit_text(f"❌ Video build failed: <code>{e}</code>")
-        return
-
-    # ---- upload video, get direct link ----
-    size_mb = Path(video_path).stat().st_size / (1024 * 1024)
-    await status.edit_text(f"📤 Uploading video ({size_mb:.1f} MB)...")
-    try:
-        video_url = await upload_and_get_url(
-            msg.chat.id, video_path, "🎬 Final video"
-        )
-    except Exception as e:
-        log.exception("video upload failed")
-        await status.edit_text(f"❌ Video upload failed: <code>{e}</code>")
-        return
-
-    # ---- AI caption ----
-    await status.edit_text("🤖 Generating AI title + description...")
-    title = data.get("orig_title", "")
-    desc  = data.get("orig_desc", "")
-    try:
-        ai = await asyncio.to_thread(generate_metadata, title, desc)
-    except Exception as e:
-        log.exception("ai failed")
-        ai = {"title": title or "Vocals only", "description": desc or ""}
-
-    await state.update_data(ai_result=ai, video_url=video_url)
-    await state.set_state(None)
-
-    await status.edit_text(
-        build_ready_message(video_url, ai["title"], ai["description"]),
-        reply_markup=kb_ai(),
-        disable_web_page_preview=True,
-    )
-
-
-# ============================================================
-# TEXT IN awaiting_audio STATE → restart or hint
-# ============================================================
-
-@router.message(S.awaiting_audio, F.text)
-async def handle_text_in_awaiting(msg: Message, state: FSMContext):
-    try:
-        extract_video_id(msg.text)
-    except ValueError:
-        await msg.answer("Please upload an audio file, or /reset to start over.")
-        return
-    # It's a new YT link — restart
-    await state.set_state(None)
-    await do_youtube_link(msg, state)
 
 
 # ============================================================
@@ -359,17 +239,12 @@ async def handle_text_in_awaiting(msg: Message, state: FSMContext):
 
 @router.message(F.text)
 async def handle_youtube_link(msg: Message, state: FSMContext):
-    await do_youtube_link(msg, state)
-
-
-async def do_youtube_link(msg: Message, state: FSMContext):
     try:
         video_id = extract_video_id(msg.text)
     except ValueError:
         await msg.answer("Send a valid YouTube link, or /help.")
         return
 
-    # ---- metadata + thumbnail ----
     status = await msg.answer("🖼 Fetching thumbnail...")
     try:
         meta = await asyncio.to_thread(get_youtube_metadata, video_id)
@@ -385,16 +260,13 @@ async def do_youtube_link(msg: Message, state: FSMContext):
                 download_thumbnail, meta["thumbnail"], video_id
             )
         except Exception as e:
-            log.warning("thumbnail download failed: %s", e)
+            log.warning("thumbnail failed: %s", e)
 
     if thumb_path and Path(thumb_path).exists():
         try:
             await msg.answer_photo(
                 FSInputFile(thumb_path),
-                caption=(
-                    f"🖼 <b>{meta['title']}</b>\n"
-                    f"📺 {meta['channel'] or ''}"
-                ),
+                caption=f"🖼 <b>{meta['title']}</b>\n📺 {meta['channel'] or ''}",
             )
         except Exception as e:
             log.warning("photo send failed: %s", e)
@@ -412,98 +284,199 @@ async def do_youtube_link(msg: Message, state: FSMContext):
         await status.edit_text(f"❌ Download failed: <code>{e}</code>")
         return
 
-    # ---- upload audio to get a direct link ----
-    await status.edit_text("📤 Uploading audio to get a direct link...")
+    # ---- upload to file server ----
+    await status.edit_text("📤 Uploading audio to file server...")
     try:
-        audio_url = await upload_and_get_url(
-            msg.chat.id, audio_path, "🎵 Raw audio"
+        audio_url = await asyncio.to_thread(
+            upload_to_file_server, Path(audio_path), "audio"
         )
     except Exception as e:
-        log.exception("audio upload failed")
-        await status.edit_text(f"❌ Audio upload failed: <code>{e}</code>")
+        log.exception("file server upload failed")
+        await status.edit_text(f"❌ Upload failed: <code>{e}</code>")
         return
 
-    # ---- save state ----
-    await state.update_data(
-        video_id=video_id,
-        thumb_path=str(thumb_path) if thumb_path else "",
-        orig_title=meta["title"] or "",
-        orig_desc=meta["description"] or "",
-    )
+    # ---- create session ----
+    sid = create_session({
+        "chat_id":     msg.chat.id,
+        "video_id":    video_id,
+        "thumb_path":  str(thumb_path) if thumb_path else "",
+        "orig_title":  meta["title"] or "",
+        "orig_desc":   meta["description"] or "",
+    })
 
-    # ---- reply with link + Done button ----
     await status.edit_text(
         "✅ <b>Audio ready</b>\n\n"
         "⬇️ <b>Direct download link:</b>\n"
         f"{audio_url}\n\n"
         "Clean the audio however you like, then tap <b>✅ Done</b> below "
-        "and upload your cleaned vocal file.",
-        reply_markup=kb_done(),
+        "to get a link where you can upload the cleaned file.",
+        reply_markup=kb_done(sid),
         disable_web_page_preview=True,
     )
 
 
 # ============================================================
-# DONE BUTTON
+# DONE BUTTON → send upload link + start polling
 # ============================================================
 
-@router.callback_query(F.data == "start_upload")
+@router.callback_query(F.data.startswith("done:"))
 async def cb_done(cb: CallbackQuery, state: FSMContext):
+    sid = cb.data.split(":", 1)[1]
+    s = get_session(sid)
+    if not s:
+        await cb.answer("Session expired", show_alert=True)
+        return
+
     await cb.answer()
     try:
         await cb.message.edit_reply_markup(reply_markup=None)
     except Exception:
         pass
 
-    await state.set_state(S.awaiting_audio)
+    upload_url = f"{FILE_SERVER}/upload/{sid}"
     await cb.message.answer(
-        "📤 <b>Now upload your cleaned vocal audio.</b>\n\n"
-        "Supported: MP3 / WAV / M4A / FLAC / OGG / OPUS "
-        "(or send as a file)."
+        "📤 <b>Upload your cleaned vocal audio here:</b>\n\n"
+        f"{upload_url}\n\n"
+        "Open the link in a browser, pick your file, and upload it.\n"
+        "I'll automatically clean it and build the video — no need to "
+        "come back here.",
+        disable_web_page_preview=True,
+    )
+
+    # background task: poll session until uploaded, then process
+    asyncio.create_task(poll_and_process(sid, cb.message.chat.id))
+
+
+async def poll_and_process(sid: str, chat_id: int):
+    log.info("Polling session %s for upload", sid)
+    deadline = time.time() + 1800  # 30 min
+
+    while time.time() < deadline:
+        s = get_session(sid)
+        if not s:
+            log.warning("session %s disappeared", sid)
+            return
+        if s.get("status") == "ready":
+            await process_upload(sid, s, chat_id)
+            return
+        await asyncio.sleep(3)
+
+    await bot.send_message(
+        chat_id,
+        "⏰ Upload timed out (30 min). Send a new YouTube link to start over.",
+    )
+
+
+async def process_upload(sid: str, s: dict, chat_id: int):
+    uploaded_path = s.get("uploaded_path")
+    thumb_path    = s.get("thumb_path")
+    orig_title    = s.get("orig_title", "")
+    orig_desc     = s.get("orig_desc", "")
+
+    status = await bot.send_message(chat_id, "📥 File received. Cleaning audio...")
+
+    # ---- clean ----
+    try:
+        cleaned = await asyncio.to_thread(remove_silence, Path(uploaded_path))
+    except Exception as e:
+        log.exception("clean failed")
+        await status.edit_text(f"❌ Cleaning failed: <code>{e}</code>")
+        return
+
+    if not cleaned or not Path(cleaned).exists():
+        await status.edit_text("❌ Cleaning produced no output.")
+        return
+
+    # ---- thumbnail check ----
+    if not thumb_path or not Path(thumb_path).exists():
+        await status.edit_text("❌ Thumbnail missing. Send the YouTube link again.")
+        return
+
+    # ---- build video ----
+    await status.edit_text("🎬 Building 1920×1080 MP4...")
+    try:
+        video_path = await asyncio.to_thread(
+            create_video, Path(thumb_path), Path(cleaned)
+        )
+    except Exception as e:
+        log.exception("build failed")
+        await status.edit_text(f"❌ Build failed: <code>{e}</code>")
+        return
+
+    # ---- upload ----
+    size_mb = Path(video_path).stat().st_size / (1024 * 1024)
+    await status.edit_text(f"📤 Uploading video ({size_mb:.1f} MB)...")
+    try:
+        video_url = await asyncio.to_thread(
+            upload_to_file_server, Path(video_path), "video"
+        )
+    except Exception as e:
+        log.exception("upload failed")
+        await status.edit_text(f"❌ Upload failed: <code>{e}</code>")
+        return
+
+    # ---- AI ----
+    await status.edit_text("🤖 Generating AI title + description...")
+    try:
+        ai = await asyncio.to_thread(generate_metadata, orig_title, orig_desc)
+    except Exception as e:
+        log.exception("ai failed")
+        ai = {"title": orig_title or "Vocals only", "description": orig_desc or ""}
+
+    update_session(sid, ai_result=ai, video_url=video_url, status="done")
+
+    await status.edit_text(
+        build_ready_message(video_url, ai["title"], ai["description"]),
+        reply_markup=kb_ai(sid),
+        disable_web_page_preview=True,
     )
 
 
 # ============================================================
-# AI REGENERATE / EDIT CALLBACKS
+# AI CALLBACKS
 # ============================================================
 
-@router.callback_query(F.data == "regen_ai")
+@router.callback_query(F.data.startswith("regen:"))
 async def cb_regen(cb: CallbackQuery, state: FSMContext):
+    sid = cb.data.split(":", 1)[1]
+    s = get_session(sid)
+    if not s:
+        await cb.answer("Session expired", show_alert=True)
+        return
     await cb.answer("Regenerating...")
-    data = await state.get_data()
-
-    title = data.get("orig_title", "")
-    desc  = data.get("orig_desc", "")
-    video_url = data.get("video_url", "")
 
     try:
-        ai = await asyncio.to_thread(generate_metadata, title, desc)
+        ai = await asyncio.to_thread(
+            generate_metadata, s.get("orig_title", ""), s.get("orig_desc", "")
+        )
     except Exception as e:
-        log.exception("ai regen failed")
         await cb.message.answer(f"❌ AI failed: <code>{e}</code>")
         return
 
-    await state.update_data(ai_result=ai)
-
+    update_session(sid, ai_result=ai)
+    video_url = s.get("video_url", "")
     new_text = build_ready_message(video_url, ai["title"], ai["description"])
 
     try:
         await cb.message.edit_text(
-            new_text,
-            reply_markup=kb_ai(),
-            disable_web_page_preview=True,
+            new_text, reply_markup=kb_ai(sid), disable_web_page_preview=True
         )
     except Exception:
-        # message might be too old to edit; send a fresh one
         await cb.message.answer(
             fmt_caption_block(ai["title"], ai["description"]),
-            reply_markup=kb_ai(),
+            reply_markup=kb_ai(sid),
         )
 
 
-@router.callback_query(F.data == "edit_ai")
+@router.callback_query(F.data.startswith("edit:"))
 async def cb_edit(cb: CallbackQuery, state: FSMContext):
+    sid = cb.data.split(":", 1)[1]
+    s = get_session(sid)
+    if not s:
+        await cb.answer("Session expired", show_alert=True)
+        return
     await cb.answer()
+    await state.update_data(edit_sid=sid)
     await state.set_state(S.editing_caption)
     await cb.message.answer(
         "✏️ Send an instruction for the AI.\n\n"
@@ -520,7 +493,7 @@ async def cb_edit(cb: CallbackQuery, state: FSMContext):
 # ============================================================
 
 @router.message()
-async def fallback(msg: Message, state: FSMContext):
+async def fallback(msg: Message):
     await msg.answer("Send a YouTube link, or type /help.")
 
 
@@ -530,11 +503,13 @@ async def fallback(msg: Message, state: FSMContext):
 
 async def main():
     log.info("Starting bot...")
-    for d in (config.AUDIO_DIR, config.IMAGE_DIR, config.VIDEO_DIR, config.UPLOAD_DIR):
+    for d in (config.AUDIO_DIR, config.IMAGE_DIR, config.VIDEO_DIR,
+              config.UPLOAD_DIR, "state/sessions"):
         Path(d).mkdir(parents=True, exist_ok=True)
 
     me = await bot.get_me()
     log.info("Bot identity: @%s (id=%s)", me.username, me.id)
+    log.info("File server: %s", FILE_SERVER)
 
     await bot.delete_webhook(drop_pending_updates=True)
     await dp.start_polling(bot)
