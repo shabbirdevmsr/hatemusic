@@ -11,7 +11,6 @@ RAPIDAPI_KEY = os.getenv(
 )
 RAPIDAPI_HOST         = "youtube-info-download-api.p.rapidapi.com"
 RAPIDAPI_DOWNLOAD_URL = f"https://{RAPIDAPI_HOST}/ajax/download.php"
-RAPIDAPI_PROGRESS_URL = f"https://{RAPIDAPI_HOST}/ajax/progress"
 
 # ============================================================
 # Groq AI
