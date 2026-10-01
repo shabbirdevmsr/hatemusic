@@ -16,11 +16,17 @@ Return ONLY valid JSON, no markdown, shaped exactly like:
 {"title": "...", "description": "..."}"""
 
 
-def generate_metadata(original_title: str, original_desc: str) -> dict:
+def generate_metadata(original_title: str, original_desc: str,
+                      custom_instruction: str = None) -> dict:
     user_prompt = (
         f"Original title:\n{original_title}\n\n"
         f"Original description:\n{original_desc[:1500]}"
     )
+    if custom_instruction:
+        user_prompt += (
+            f"\n\nAdditional instruction from the user:\n{custom_instruction}"
+        )
+
     payload = {
         "model": GROQ_MODEL,
         "messages": [
