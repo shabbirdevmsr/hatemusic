@@ -1,5 +1,11 @@
-"""Fetch YouTube metadata + download the thumbnail image."""
+"""Fetch YouTube metadata + download the thumbnail image.
 
+Note: YouTube now serves thumbnails as WebP even when the URL ends in .jpg.
+We re-encode to a real JPEG with FFmpeg after download so downstream tools
+(ffmpeg -loop 1) never choke on a mislabeled image.
+"""
+
+import subprocess
 import requests
 from pathlib import Path
 
@@ -33,6 +39,31 @@ def get_youtube_metadata(video_id: str) -> dict:
     }
 
 
+def _reencode_to_jpeg(src: Path) -> Path:
+    """Use FFmpeg to make sure the file is a REAL baseline JPEG."""
+    fixed = src.with_name(src.stem + "_fixed.jpg")
+
+    cmd = [
+        "ffmpeg", "-y",
+        "-i", str(src),
+        "-f", "image2",
+        "-vcodec", "mjpeg",
+        "-q:v", "2",
+        str(fixed),
+    ]
+    result = subprocess.run(cmd, capture_output=True, text=True)
+
+    if result.returncode == 0 and fixed.exists() and fixed.stat().st_size > 0:
+        src.unlink()
+        fixed.rename(src)
+        return src
+
+    # If re-encode failed, keep the original (some ffmpeg builds handle webp fine)
+    if fixed.exists():
+        fixed.unlink()
+    return src
+
+
 def download_thumbnail(url: str, video_id: str) -> Path:
     Path(IMAGE_DIR).mkdir(parents=True, exist_ok=True)
     out = Path(IMAGE_DIR) / f"{video_id}.jpg"
@@ -45,4 +76,6 @@ def download_thumbnail(url: str, video_id: str) -> Path:
         for chunk in r.iter_content(8192):
             f.write(chunk)
 
+    # Normalize to real JPEG
+    out = _reencode_to_jpeg(out)
     return out
