@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+venv/
+.venv/
+env/
+.env
+
+# Flask
+instance/
+*.sqlite3
+
+# App working dirs (regenerated at runtime)
+audio/
+images/
+videos/
+uploads/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Secrets
+.env
+cookies.txt
