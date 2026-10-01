@@ -37,23 +37,28 @@
   .mono { font-family: monospace; }
   .big-link { display: inline-block; margin: 10px 0; padding: 10px 16px;
               background: #1f6feb; color: white; border-radius: 6px;
-              text-decoration: none; font-weight: 600; }
+              text-decoration: none; font-weight: 600; margin-right: 10px; }
   .big-link:hover { background: #388bfd; }
   details { margin-top: 12px; font-size: 12px; color: #8b949e; }
   details pre { background: #0d1117; padding: 10px; border-radius: 6px;
-                overflow: auto; max-height: 200px; white-space: pre-wrap; }
+                overflow: auto; max-height: 250px; white-space: pre-wrap; }
   video { width: 100%; max-width: 640px; border-radius: 6px;
           margin: 10px 0; display: block; }
   .editable { background: #0d1117; border: 1px solid #30363d; border-radius: 6px;
               padding: 10px; margin-top: 6px; min-height: 40px; white-space: pre-wrap; }
   .hint { color: #8b949e; font-size: 13px; margin: 0 0 12px; }
+  .stats { font-size: 13px; background: #0d1117; border: 1px solid #30363d;
+           border-radius: 6px; padding: 10px 14px; margin: 10px 0; }
+  .stats span { color: #7ee787; font-weight: 600; }
+  .divider { border-top: 1px dashed #30363d; margin: 16px 0; }
+  .small { font-size: 12px; color: #8b949e; }
 </style>
 </head>
 <body>
 
 <header>
   <h1>🎤 Vocals-Only Video Pipeline</h1>
-  <p class="sub">YouTube URL → RapidAPI audio → clean → 16:9 video → AI metadata</p>
+  <p class="sub">YouTube URL → RapidAPI download → auto FFmpeg clean → 16:9 video → AI metadata</p>
   <div id="health" class="health"></div>
 </header>
 
@@ -79,29 +84,36 @@
   </section>
 
   <section class="card disabled" id="step2">
-    <h2>2. Download audio (RapidAPI)</h2>
-    <button id="btn-download">Download audio now</button>
+    <h2>2. Download audio + auto-remove silence / noise</h2>
+    <p class="hint">RapidAPI downloads the raw MP3, then FFmpeg automatically strips
+      silence and reduces background noise. You get both files.</p>
+    <button id="btn-download">Download & auto-clean</button>
+
     <div id="download-out" class="hidden">
-      <p>Original audio (download, clean it however you want, then come to Step 3):</p>
-      <a id="download-link" href="#" download class="big-link">⬇ Download original audio</a>
-      <details><summary>RapidAPI log</summary><pre id="download-log"></pre></details>
+      <div class="stats" id="clean-stats"></div>
+
+      <div class="label">Cleaned audio (ready for video)</div>
+      <a id="clean-link" href="#" download class="big-link">⬇ Download cleaned MP3</a>
+      <a id="raw-link"   href="#" download class="big-link"
+         style="background:#30363d">⬇ Raw MP3 (no cleaning)</a>
+
+      <details><summary>Full log</summary><pre id="download-log"></pre></details>
+
+      <div class="divider"></div>
+      <div class="label">Optional — replace with your own cleaned file</div>
+      <p class="small">If you want to use a different audio file you cleaned yourself,
+        upload it here. It will be auto-cleaned again.</p>
+      <input type="file" id="file-input" accept="audio/*">
+      <button id="btn-clean" style="margin-top:8px">Upload & re-clean</button>
+      <div id="clean-out" class="hidden" style="margin-top:10px">
+        <a id="clean-manual-link" href="#" download class="big-link">⬇ Download re-cleaned MP3</a>
+        <details><summary>Log</summary><pre id="clean-log"></pre></details>
+      </div>
     </div>
   </section>
 
   <section class="card disabled" id="step3">
-    <h2>3. Upload your final audio</h2>
-    <p class="hint">Upload the file you just cleaned. The server will then remove
-      remaining silence and background noise automatically.</p>
-    <input type="file" id="file-input" accept="audio/*">
-    <button id="btn-clean">Remove silence + noise</button>
-    <div id="clean-out" class="hidden">
-      <a id="clean-link" href="#" download class="big-link">⬇ Download cleaned audio</a>
-      <details><summary>Server log</summary><pre id="clean-log"></pre></details>
-    </div>
-  </section>
-
-  <section class="card disabled" id="step4">
-    <h2>4. Build video (1920×1080)</h2>
+    <h2>3. Build video (1920×1080)</h2>
     <button id="btn-video">Build video now</button>
     <div id="video-out" class="hidden">
       <video id="video-player" controls></video>
@@ -110,8 +122,8 @@
     </div>
   </section>
 
-  <section class="card disabled" id="step5">
-    <h2>5. AI title & description</h2>
+  <section class="card disabled" id="step4">
+    <h2>4. AI title & description</h2>
     <button id="btn-ai">Generate with AI</button>
     <div id="ai-out" class="hidden">
       <div class="label">Title</div>
@@ -130,7 +142,6 @@ const state = {
   thumbnail_url: null,
   title: "",
   description: "",
-  audio_name: null,
   cleaned_name: null,
 };
 
@@ -141,7 +152,7 @@ const enableStep = el => el.classList.remove("disabled");
 fetch("/api/health").then(r => r.json()).then(h => {
   const box = $("health");
   if (h.ok) {
-    box.textContent = "✅ FFmpeg detected — RapidAPI ready";
+    box.textContent = "✅ FFmpeg detected — ready";
     box.classList.add("ok");
   } else {
     box.textContent = "❌ Missing: " + h.missing.join(", ") + ". " + h.hint;
@@ -187,9 +198,9 @@ $("btn-meta").onclick = async () => {
   }
 };
 
-// ---- STEP 2 ----
+// ---- STEP 2 (download + auto clean) ----
 $("btn-download").onclick = async () => {
-  $("btn-download").textContent = "Downloading via RapidAPI...";
+  $("btn-download").textContent = "Downloading + cleaning... (may take a minute)";
   $("btn-download").disabled = true;
 
   try {
@@ -201,21 +212,32 @@ $("btn-download").onclick = async () => {
     const data = await res.json();
     if (!data.success) throw new Error(data.error);
 
-    state.audio_name = data.audio_name;
+    state.cleaned_name = data.cleaned_name;
 
-    $("download-link").href = data.audio_url;
+    // stats
+    const s = data.stats || {};
+    $("clean-stats").innerHTML =
+      `Original: <span>${(s.original_duration||0).toFixed(2)}s</span> · ` +
+      `After clean: <span>${(s.new_duration||0).toFixed(2)}s</span> · ` +
+      `Removed: <span>${(s.removed||0).toFixed(2)}s</span> · ` +
+      `Silence sections: <span>${s.silence_sections||0}</span> · ` +
+      `Segments kept: <span>${s.segments_kept||0}</span>`;
+
+    $("clean-link").href = data.cleaned_url;
+    $("raw-link").href   = data.audio_url;
     $("download-log").textContent = (data.logs || []).join("\n");
+
     show($("download-out"));
     enableStep($("step3"));
   } catch (e) {
     alert("Error: " + e.message);
   } finally {
-    $("btn-download").textContent = "Download audio now";
+    $("btn-download").textContent = "Download & auto-clean";
     $("btn-download").disabled = false;
   }
 };
 
-// ---- STEP 3 ----
+// ---- optional manual re-clean ----
 $("btn-clean").onclick = async () => {
   const file = $("file-input").files[0];
   if (!file) return alert("Pick a file first");
@@ -233,21 +255,21 @@ $("btn-clean").onclick = async () => {
 
     state.cleaned_name = data.cleaned_name;
 
-    $("clean-link").href = data.cleaned_url;
+    $("clean-manual-link").href = data.cleaned_url;
     $("clean-log").textContent = (data.logs || []).join("\n");
     show($("clean-out"));
-    enableStep($("step4"));
+    enableStep($("step3"));
   } catch (e) {
     alert("Error: " + e.message);
   } finally {
-    $("btn-clean").textContent = "Remove silence + noise";
+    $("btn-clean").textContent = "Upload & re-clean";
     $("btn-clean").disabled = false;
   }
 };
 
-// ---- STEP 4 ----
+// ---- STEP 3 ----
 $("btn-video").onclick = async () => {
-  if (!state.cleaned_name) return alert("Clean audio first");
+  if (!state.cleaned_name) return alert("Download or clean audio first");
 
   $("btn-video").textContent = "Building...";
   $("btn-video").disabled = true;
@@ -264,11 +286,11 @@ $("btn-video").onclick = async () => {
     const data = await res.json();
     if (!data.success) throw new Error(data.error);
 
-    $("video-link").href = data.video_url;
+    $("video-link").href  = data.video_url;
     $("video-player").src = data.video_url;
     $("video-log").textContent = (data.logs || []).join("\n");
     show($("video-out"));
-    enableStep($("step5"));
+    enableStep($("step4"));
   } catch (e) {
     alert("Error: " + e.message);
   } finally {
@@ -277,7 +299,7 @@ $("btn-video").onclick = async () => {
   }
 };
 
-// ---- STEP 5 ----
+// ---- STEP 4 ----
 $("btn-ai").onclick = async () => {
   $("btn-ai").textContent = "Thinking...";
   $("btn-ai").disabled = true;
