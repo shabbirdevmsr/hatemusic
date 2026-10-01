@@ -158,6 +158,7 @@ def api_clean():
 
 @app.route("/api/build_video", methods=["POST"])
 def api_build_video():
+    logs = []
     try:
         data = request.get_json(force=True)
         audio_name = data["audio_name"]
@@ -165,13 +166,14 @@ def api_build_video():
 
         audio_path = Path(config.AUDIO_DIR) / audio_name
         if not audio_path.exists():
-            return jsonify({"success": False, "error": "Audio not found"}), 404
+            return jsonify({"success": False, "error": "Audio not found",
+                            "logs": logs}), 404
 
         thumb_path = Path(config.IMAGE_DIR) / f"{video_id}.jpg"
         if not thumb_path.exists():
-            return jsonify({"success": False, "error": "Thumbnail not found"}), 404
+            return jsonify({"success": False, "error": "Thumbnail not found",
+                            "logs": logs}), 404
 
-        logs = []
         video_path = create_video(thumb_path, audio_path,
                                   log=lambda m: logs.append(str(m)))
 
@@ -183,7 +185,8 @@ def api_build_video():
         })
     except Exception as e:
         traceback.print_exc()
-        return jsonify({"success": False, "error": str(e)}), 500
+        return jsonify({"success": False, "error": str(e),
+                        "logs": logs}), 500
 
 
 @app.route("/api/ai_metadata", methods=["POST"])
