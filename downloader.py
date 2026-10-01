@@ -1,9 +1,25 @@
 """Download audio from YouTube using the RapidAPI YouTube Download API.
 
-The API works in three steps:
-  1. GET /ajax/download.php  -> submit job, returns an `id`
-  2. GET /ajax/progress      -> poll until progress == 1000, then get download_url
-  3. GET download_url        -> save the MP3 locally
+Real response shape (verified with curl):
+
+Step 1 — GET /ajax/download.php
+{
+  "success": true,
+  "id": "v2_stream_bf04e648f1ed13d19378",
+  "progress_url": "https://p.savenow.to/api/progress?id=...&src=rapidapi",
+  "title": "...",
+  "thumbnail_url": "...",
+  "format": "mp3"
+}
+
+Step 2 — GET progress_url
+{
+  "success": 1,
+  "progress": 1000,
+  "download_url": "https://bernice23.savenow.to/api/v2/download/...",
+  "text": "Finished",
+  "title": "..."
+}
 """
 
 import time
@@ -14,7 +30,6 @@ from config import (
     RAPIDAPI_KEY,
     RAPIDAPI_HOST,
     RAPIDAPI_DOWNLOAD_URL,
-    RAPIDAPI_PROGRESS_URL,
     AUDIO_DIR,
 )
 
@@ -44,12 +59,20 @@ def download_audio(video_url: str, video_id: str = None, log=print) -> Path:
     )
 
     if not r.ok:
-        raise RuntimeError(f"RapidAPI download failed: {r.status_code} {r.text[:300]}")
+        raise RuntimeError(
+            f"RapidAPI download failed: {r.status_code} {r.text[:300]}"
+        )
 
     data = r.json()
-    job_id = data.get("id")
-    if not job_id:
-        raise RuntimeError(f"No job id returned: {data}")
+
+    if not data.get("success"):
+        raise RuntimeError(f"RapidAPI returned success=false: {data}")
+
+    job_id       = data.get("id")
+    progress_url = data.get("progress_url")
+
+    if not job_id or not progress_url:
+        raise RuntimeError(f"Missing id or progress_url in response: {data}")
 
     log(f"[RapidAPI] Job ID: {job_id}")
     title = data.get("title")
@@ -61,12 +84,7 @@ def download_audio(video_url: str, video_id: str = None, log=print) -> Path:
     deadline = time.time() + 600  # 10 minutes max
 
     while time.time() < deadline:
-        pr = requests.get(
-            RAPIDAPI_PROGRESS_URL,
-            headers=_headers(),
-            params={"id": job_id},
-            timeout=30,
-        )
+        pr = requests.get(progress_url, timeout=30)
 
         if not pr.ok:
             log(f"  poll HTTP {pr.status_code}")
@@ -76,8 +94,8 @@ def download_audio(video_url: str, video_id: str = None, log=print) -> Path:
         state    = pr.json()
         progress = state.get("progress", 0)
 
-        # API reports 0..1000
-        if progress == 1000:
+        # progress ranges 0..1000, 1000 means finished
+        if progress >= 1000:
             download_url = state.get("download_url")
             if download_url:
                 break
