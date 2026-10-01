@@ -1,4 +1,12 @@
-"""Remove silence + background noise from an audio file."""
+"""Remove silence + background noise from an audio file.
+
+Pipeline:
+  1. ffprobe    -> duration
+  2. silencedetect -> list of (start, end) silent ranges
+  3. Invert     -> list of non-silent segments (dropping tiny ones)
+  4. ffmpeg filter_complex:
+       atrim each segment -> concat -> afftdn (denoise) -> mp3
+"""
 
 import re
 import subprocess
@@ -55,22 +63,35 @@ def create_segments(duration, silence_ranges):
 
 
 def remove_silence(filename, log=print):
+    """Clean audio; returns (output_path, stats_dict) or (None, stats_dict)."""
     input_path  = Path(filename)
     output_path = input_path.with_name(input_path.stem + "_nosilence.mp3")
 
     log(f"Cleaning audio: {input_path.name}")
 
+    stats = {
+        "original_duration": 0.0,
+        "new_duration": 0.0,
+        "removed": 0.0,
+        "silence_sections": 0,
+        "segments_kept": 0,
+    }
+
     try:
         duration = get_duration(input_path)
+        stats["original_duration"] = duration
         log(f"Duration        : {duration:.2f}s")
 
         silence_ranges = detect_silence(input_path)
+        stats["silence_sections"] = len(silence_ranges)
         log(f"Silence found   : {len(silence_ranges)} section(s)")
 
         segments = create_segments(duration, silence_ranges)
+        stats["segments_kept"] = len(segments)
+
         if not segments:
             log("No audio segments remain.")
-            return None
+            return None, stats
 
         log(f"Segments kept   : {len(segments)}")
 
@@ -110,15 +131,18 @@ def remove_silence(filename, log=print):
         result = subprocess.run(cmd, capture_output=True, text=True)
         if result.returncode != 0:
             log("FFmpeg stderr:\n" + result.stderr[-2000:])
-            return None
+            return None, stats
 
         new_duration = get_duration(output_path)
+        stats["new_duration"] = new_duration
+        stats["removed"]      = duration - new_duration
+
         log(f"New duration    : {new_duration:.2f}s")
         log(f"Removed         : {duration - new_duration:.2f}s")
         log(f"Saved           : {output_path}")
 
-        return output_path
+        return output_path, stats
 
     except Exception as e:
         log(f"Error: {e}")
-        return None
+        return None, stats
